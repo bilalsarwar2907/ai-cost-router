@@ -1,0 +1,75 @@
+# ── AI Cost Router — docker-compose.yml ──────────────────────────────────────
+#
+# IMPORTANT: Move this file one level up before running:
+#   move docker-compose.yml ..\ (Windows CMD)
+#   mv docker-compose.yml ../  (PowerShell / Git Bash)
+#
+# Then from C:\Users\biges\ run:
+#   docker compose up --build
+#
+# Services:
+#   db       → SQL Server 2022  on port 1433
+#   backend  → FastAPI          on port 8000  (http://localhost:8000/docs)
+#   frontend → React + nginx    on port 3000  (http://localhost:3000)
+#
+# Required .env file at C:\Users\biges\.env (copy from backend\.env.example):
+#   DB_PASSWORD=YourStrong!Passw0rd
+#   GEMINI_API_KEY=...
+#   OPENAI_API_KEY=...       (optional)
+#   ANTHROPIC_API_KEY=...    (optional)
+# ---------------------------------------------------------------------------
+
+services:
+
+  # ── SQL Server 2022 ────────────────────────────────────────────────────────
+  db:
+    image: mcr.microsoft.com/mssql/server:2022-latest
+    environment:
+      ACCEPT_EULA: "Y"
+      MSSQL_SA_PASSWORD: "${DB_PASSWORD}"
+    ports:
+      - "1433:1433"
+    volumes:
+      - sqlserver_data:/var/opt/mssql
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - |
+          /opt/mssql-tools18/bin/sqlcmd -S localhost -U sa -P "$$MSSQL_SA_PASSWORD" -Q "SELECT 1" -C -l 5
+      interval: 15s
+      timeout: 10s
+      retries: 12
+      start_period: 30s
+
+  # ── FastAPI backend ────────────────────────────────────────────────────────
+  backend:
+    build:
+      context: ./backend
+    ports:
+      - "8000:8000"
+    environment:
+      DB_SERVER:        db
+      DB_NAME:          ai_cost_router
+      DB_DRIVER:        "ODBC Driver 18 for SQL Server"
+      DB_USER:          sa
+      DB_PASSWORD:      "${DB_PASSWORD}"
+      GEMINI_API_KEY:   "${GEMINI_API_KEY:-}"
+      OPENAI_API_KEY:   "${OPENAI_API_KEY:-}"
+      ANTHROPIC_API_KEY: "${ANTHROPIC_API_KEY:-}"
+    depends_on:
+      db:
+        condition: service_healthy
+    restart: on-failure
+
+  # ── React frontend (nginx) ─────────────────────────────────────────────────
+  frontend:
+    build:
+      context: ./frontend
+    ports:
+      - "3000:80"
+    depends_on:
+      - backend
+
+volumes:
+  sqlserver_data:
+    driver: local
