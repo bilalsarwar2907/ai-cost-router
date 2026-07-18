@@ -17,7 +17,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from models import AnalyzeRequest, AnalyzeResponse, RouteMapResponse
 from router import TaskRouter, Route, COST_PER_1K_TOKENS
 from executor import Executor
-from database import log_execution, get_history, get_analytics
+from database import log_execution, get_history, get_analytics, run_migration
 
 # ---------------------------------------------------------------------------
 # App setup
@@ -39,6 +39,11 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+@app.on_event("startup")
+async def startup():
+    """Run DB migration on startup — idempotent, safe to call every time."""
+    await run_migration()
 
 # Singletons — initialised once, shared across requests
 router   = TaskRouter()

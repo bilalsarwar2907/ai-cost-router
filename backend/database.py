@@ -29,10 +29,23 @@ def _build_conn_str() -> str:
     if url:
         return url
 
-    server   = os.getenv("DB_SERVER",  "localhost")
-    database = os.getenv("DB_NAME",    "ai_cost_router")
-    driver   = os.getenv("DB_DRIVER",  "ODBC Driver 18 for SQL Server")
+    server   = os.getenv("DB_SERVER",   "localhost")
+    database = os.getenv("DB_NAME",     "ai_cost_router")
+    driver   = os.getenv("DB_DRIVER",   "ODBC Driver 18 for SQL Server")
+    user     = os.getenv("DB_USER",     "")
+    password = os.getenv("DB_PASSWORD", "")
 
+    if user and password:
+        # SQL Server Authentication — used in Docker
+        return (
+            f"DRIVER={{{driver}}};"
+            f"SERVER={server};"
+            f"DATABASE={database};"
+            f"UID={user};"
+            f"PWD={password};"
+            f"TrustServerCertificate=yes;"
+        )
+    # Windows Authentication — used in local dev
     return (
         f"DRIVER={{{driver}}};"
         f"SERVER={server};"
@@ -55,15 +68,28 @@ def _run_migration_sync() -> None:
         sql = f.read()
 
     # Connect to master first (database may not exist yet)
-    server = os.getenv("DB_SERVER", "localhost")
-    driver = os.getenv("DB_DRIVER", "ODBC Driver 18 for SQL Server")
-    conn_str = (
-        f"DRIVER={{{driver}}};"
-        f"SERVER={server};"
-        f"DATABASE=master;"
-        f"Trusted_Connection=yes;"
-        f"TrustServerCertificate=yes;"
-    )
+    server   = os.getenv("DB_SERVER",   "localhost")
+    driver   = os.getenv("DB_DRIVER",   "ODBC Driver 18 for SQL Server")
+    user     = os.getenv("DB_USER",     "")
+    password = os.getenv("DB_PASSWORD", "")
+
+    if user and password:
+        conn_str = (
+            f"DRIVER={{{driver}}};"
+            f"SERVER={server};"
+            f"DATABASE=master;"
+            f"UID={user};"
+            f"PWD={password};"
+            f"TrustServerCertificate=yes;"
+        )
+    else:
+        conn_str = (
+            f"DRIVER={{{driver}}};"
+            f"SERVER={server};"
+            f"DATABASE=master;"
+            f"Trusted_Connection=yes;"
+            f"TrustServerCertificate=yes;"
+        )
     conn = pyodbc.connect(conn_str, timeout=10, autocommit=True)
     try:
         cursor = conn.cursor()
@@ -80,9 +106,26 @@ def _run_migration_sync() -> None:
 
 
 async def run_migration() -> None:
-    """Public entry point — run from CLI or startup."""
-    await asyncio.to_thread(_run_migration_sync)
-    print("[DB] Migration complete.")
+    """
+    Public entry point — run from CLI or on FastAPI startup.
+    Retries for up to 60 seconds to handle the SQL Server warm-up window
+    that occurs even after the Docker healthcheck passes.
+    """
+    max_attempts = 12
+    delay_seconds = 5
+
+    for attempt in range(1, max_attempts + 1):
+        try:
+            await asyncio.to_thread(_run_migration_sync)
+            print("[DB] Migration complete.")
+            return
+        except Exception as exc:
+            if attempt < max_attempts:
+                print(f"[DB] Migration attempt {attempt}/{max_attempts} failed: {exc} — retrying in {delay_seconds}s")
+                await asyncio.sleep(delay_seconds)
+            else:
+                print(f"[DB] Migration failed after {max_attempts} attempts: {exc}")
+                print("[DB] App will continue — DB logging disabled until connection is restored.")
 
 
 # ── Sync query functions (called via asyncio.to_thread) ───────────────────────
