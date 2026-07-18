@@ -17,6 +17,7 @@ tradeoff models based on observed execution telemetry.
 
 from dataclasses import dataclass
 from enum import Enum
+import preprocess
 
 
 class Route(str, Enum):
@@ -178,7 +179,8 @@ class TaskRouter:
     def estimate_cost(self, route: Route, content: str) -> float:
         if route == Route.LOCAL:
             return 0.0
-        word_count = len(content.split())
+        # Use compressed word count — reflects what the model actually receives
+        word_count = preprocess.compressed_word_count(content, route.value)
         estimated_tokens = int(word_count / 0.75)
         return round((estimated_tokens / 1000) * COST_PER_1K_TOKENS[route], 6)
 
