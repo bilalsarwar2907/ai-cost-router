@@ -1,6 +1,7 @@
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
 import {
-  BarChart, Bar, XAxis, YAxis, Tooltip,
+  BarChart, Bar, LineChart, Line,
+  XAxis, YAxis, Tooltip,
   ResponsiveContainer, Cell,
 } from 'recharts'
 
@@ -61,6 +62,7 @@ function StatCard({ label, value, sub, highlight }) {
 // ── Main component ────────────────────────────────────────────────────────────
 
 export default function App() {
+  // Analyze tab state
   const [content, setContent]             = useState(DEMO_CONTENT)
   const [selectedTasks, setSelectedTasks] = useState([
     'extract_dates', 'extract_tickers', 'classification', 'executive_summary',
@@ -68,6 +70,42 @@ export default function App() {
   const [results, setResults] = useState(null)
   const [loading, setLoading] = useState(false)
   const [error, setError]     = useState(null)
+
+  // Tab state
+  const [activeTab, setActiveTab] = useState('analyze')
+
+  // History tab state
+  const [analytics, setAnalytics]   = useState(null)
+  const [history, setHistory]       = useState([])
+  const [histLoading, setHistLoading] = useState(false)
+  const [histError, setHistError]   = useState(null)
+
+  // Fetch analytics + history whenever History tab is opened
+  useEffect(() => {
+    if (activeTab !== 'history') return
+    const load = async () => {
+      setHistLoading(true)
+      setHistError(null)
+      try {
+        const [analyticsRes, historyRes] = await Promise.all([
+          fetch(`${API_URL}/analytics`),
+          fetch(`${API_URL}/history?limit=50`),
+        ])
+        if (!analyticsRes.ok || !historyRes.ok) throw new Error('API error')
+        const [analyticsData, historyData] = await Promise.all([
+          analyticsRes.json(),
+          historyRes.json(),
+        ])
+        setAnalytics(analyticsData)
+        setHistory(historyData.executions ?? [])
+      } catch (e) {
+        setHistError('Cannot load history. Is the backend running?')
+      } finally {
+        setHistLoading(false)
+      }
+    }
+    load()
+  }, [activeTab])
 
   const toggleTask = (id) =>
     setSelectedTasks(prev =>
@@ -101,7 +139,7 @@ export default function App() {
     }
   }
 
-  // Chart data — multiply micro-dollars for readability
+  // Chart data helpers
   const toMicro = v => parseFloat((v * 1e6).toFixed(3))
 
   const costData    = results?.tasks.map(t => ({ name: t.task_type.replace(/_/g, ' '), v: toMicro(t.estimated_cost_usd), route: t.route }))
@@ -110,6 +148,14 @@ export default function App() {
   const tooltipStyle = {
     contentStyle: { background: '#0f172a', border: '1px solid #1e293b', borderRadius: 8, fontSize: 11 },
     labelStyle:   { color: '#94a3b8' },
+  }
+
+  // Format ISO timestamp to short date/time
+  const fmtDate = iso => {
+    if (!iso) return '—'
+    const d = new Date(iso)
+    return d.toLocaleDateString('en-GB', { day: '2-digit', month: 'short' }) +
+           ' ' + d.toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' })
   }
 
   return (
@@ -204,156 +250,345 @@ export default function App() {
           </div>
         </aside>
 
-        {/* ── Right panel: Results ── */}
-        <main className="flex-1 overflow-y-auto p-6">
+        {/* ── Right panel ── */}
+        <main className="flex-1 overflow-y-auto flex flex-col">
 
-          {/* Empty state */}
-          {!results && !loading && (
-            <div className="h-full flex flex-col items-center justify-center text-slate-700 gap-2">
-              <span className="text-5xl">⚡</span>
-              <p className="text-sm">Select tasks and click Analyze</p>
-              <p className="text-xs">The router picks the cheapest path for each task</p>
-            </div>
-          )}
+          {/* Tab bar */}
+          <div className="flex-shrink-0 border-b border-slate-800 flex px-6 gap-1 pt-3">
+            {[
+              { id: 'analyze', label: 'Analyze' },
+              { id: 'history', label: 'History' },
+            ].map(tab => (
+              <button
+                key={tab.id}
+                onClick={() => setActiveTab(tab.id)}
+                className={`px-4 py-2 text-xs font-semibold rounded-t border-b-2 transition-colors ${
+                  activeTab === tab.id
+                    ? 'border-blue-500 text-blue-400'
+                    : 'border-transparent text-slate-500 hover:text-slate-300'
+                }`}
+              >
+                {tab.label}
+              </button>
+            ))}
+          </div>
 
-          {/* Loading state */}
-          {loading && (
-            <div className="h-full flex items-center justify-center">
-              <div className="text-center text-slate-500">
-                <div className="w-8 h-8 border-2 border-slate-700 border-t-blue-500 rounded-full animate-spin mx-auto mb-3" />
-                <p className="text-sm">Routing tasks to optimal execution tier...</p>
-              </div>
-            </div>
-          )}
+          {/* ── Analyze tab ── */}
+          {activeTab === 'analyze' && (
+            <div className="flex-1 overflow-y-auto p-6">
 
-          {/* Results */}
-          {results && (
-            <div className="space-y-5 max-w-4xl">
-
-              {/* Savings cards */}
-              <div className="grid grid-cols-3 gap-4">
-                <StatCard
-                  highlight
-                  label="Cost Saved"
-                  value={`${results.summary.savings_percent}%`}
-                  sub={`$${toMicro(results.summary.total_savings_usd)} μ$ saved vs all-premium`}
-                />
-                <StatCard
-                  label="With Routing"
-                  value={`$${toMicro(results.summary.total_cost_usd)} μ$`}
-                  sub={`${results.summary.total_tasks} tasks`}
-                />
-                <StatCard
-                  label="Without Routing"
-                  value={`$${toMicro(results.summary.cost_if_all_premium_usd)} μ$`}
-                  sub="all routed to premium"
-                />
-              </div>
-
-              {/* Routing decisions table */}
-              <div className="bg-slate-900 border border-slate-800 rounded-xl overflow-hidden">
-                <div className="px-4 py-3 border-b border-slate-800">
-                  <h2 className="text-sm font-semibold text-white">Routing Decisions</h2>
+              {/* Empty state */}
+              {!results && !loading && (
+                <div className="h-full flex flex-col items-center justify-center text-slate-700 gap-2">
+                  <span className="text-5xl">⚡</span>
+                  <p className="text-sm">Select tasks and click Analyze</p>
+                  <p className="text-xs">The router picks the cheapest path for each task</p>
                 </div>
-                <div className="overflow-x-auto">
-                  <table className="w-full text-xs">
-                    <thead>
-                      <tr className="border-b border-slate-800 text-slate-500">
-                        <th className="text-left px-4 py-2 font-normal">Task</th>
-                        <th className="text-left px-4 py-2 font-normal">Route</th>
-                        <th className="text-left px-4 py-2 font-normal">Reason</th>
-                        <th className="text-right px-4 py-2 font-normal">Cost (μ$)</th>
-                        <th className="text-right px-4 py-2 font-normal">Latency</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {results.tasks.map((task, i) => (
-                        <tr key={i} className="border-b border-slate-800/50 hover:bg-slate-800/30 transition-colors">
-                          <td className="px-4 py-3 text-slate-300 font-medium">{task.task_type}</td>
-                          <td className="px-4 py-3"><RouteBadge route={task.route} /></td>
-                          <td className="px-4 py-3 text-slate-500 max-w-xs">
-                            <span className="block truncate" title={task.routing_reason}>
-                              {task.routing_reason}
-                            </span>
-                          </td>
-                          <td className="px-4 py-3 text-right">
-                            {task.estimated_cost_usd === 0
-                              ? <span className="text-emerald-400">$0.00</span>
-                              : <span className="text-slate-400">${toMicro(task.estimated_cost_usd)}</span>
-                            }
-                          </td>
-                          <td className="px-4 py-3 text-right text-slate-400">{task.estimated_latency_ms}ms</td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                </div>
-              </div>
+              )}
 
-              {/* Charts */}
-              <div className="grid grid-cols-2 gap-4">
-                <div className="bg-slate-900 border border-slate-800 rounded-xl p-4">
-                  <h3 className="text-xs font-semibold text-slate-400 uppercase tracking-widest mb-4">
-                    Cost per Task (μ$)
-                  </h3>
-                  <ResponsiveContainer width="100%" height={160}>
-                    <BarChart data={costData} margin={{ left: -20, right: 8 }}>
-                      <XAxis dataKey="name" tick={{ fill: '#475569', fontSize: 9 }} />
-                      <YAxis tick={{ fill: '#475569', fontSize: 9 }} />
-                      <Tooltip {...tooltipStyle} formatter={v => [`${v} μ$`, 'cost']} />
-                      <Bar dataKey="v" radius={[4, 4, 0, 0]}>
-                        {costData.map((entry, i) => (
-                          <Cell key={i} fill={TIER[entry.route]?.color ?? '#6366f1'} />
-                        ))}
-                      </Bar>
-                    </BarChart>
-                  </ResponsiveContainer>
+              {/* Loading state */}
+              {loading && (
+                <div className="h-full flex items-center justify-center">
+                  <div className="text-center text-slate-500">
+                    <div className="w-8 h-8 border-2 border-slate-700 border-t-blue-500 rounded-full animate-spin mx-auto mb-3" />
+                    <p className="text-sm">Routing tasks to optimal execution tier...</p>
+                  </div>
                 </div>
+              )}
 
-                <div className="bg-slate-900 border border-slate-800 rounded-xl p-4">
-                  <h3 className="text-xs font-semibold text-slate-400 uppercase tracking-widest mb-4">
-                    Latency per Task (ms)
-                  </h3>
-                  <ResponsiveContainer width="100%" height={160}>
-                    <BarChart data={latencyData} margin={{ left: -20, right: 8 }}>
-                      <XAxis dataKey="name" tick={{ fill: '#475569', fontSize: 9 }} />
-                      <YAxis tick={{ fill: '#475569', fontSize: 9 }} />
-                      <Tooltip {...tooltipStyle} formatter={v => [`${v}ms`, 'latency']} />
-                      <Bar dataKey="v" radius={[4, 4, 0, 0]}>
-                        {latencyData.map((entry, i) => (
-                          <Cell key={i} fill={TIER[entry.route]?.color ?? '#6366f1'} />
-                        ))}
-                      </Bar>
-                    </BarChart>
-                  </ResponsiveContainer>
-                </div>
-              </div>
+              {/* Results */}
+              {results && (
+                <div className="space-y-5 max-w-4xl">
 
-              {/* Execution results */}
-              <div className="bg-slate-900 border border-slate-800 rounded-xl overflow-hidden">
-                <div className="px-4 py-3 border-b border-slate-800">
-                  <h2 className="text-sm font-semibold text-white">Execution Results</h2>
-                </div>
-                <div className="divide-y divide-slate-800">
-                  {results.tasks.map((task, i) => (
-                    <div key={i} className="px-4 py-3">
-                      <div className="flex items-center gap-2 mb-2">
-                        <RouteBadge route={task.route} />
-                        <span className="text-xs font-medium text-slate-300">{task.task_type}</span>
-                        <span className="text-xs text-slate-700 ml-auto">{task.execution_method}</span>
-                      </div>
-                      <pre className="text-xs text-slate-400 whitespace-pre-wrap break-words leading-relaxed">
-                        {typeof task.result === 'string'
-                          ? task.result
-                          : JSON.stringify(task.result, null, 2)}
-                      </pre>
+                  {/* Savings cards */}
+                  <div className="grid grid-cols-3 gap-4">
+                    <StatCard
+                      highlight
+                      label="Cost Saved"
+                      value={`${results.summary.savings_percent}%`}
+                      sub={`$${toMicro(results.summary.total_savings_usd)} μ$ saved vs all-premium`}
+                    />
+                    <StatCard
+                      label="With Routing"
+                      value={`$${toMicro(results.summary.total_cost_usd)} μ$`}
+                      sub={`${results.summary.total_tasks} tasks`}
+                    />
+                    <StatCard
+                      label="Without Routing"
+                      value={`$${toMicro(results.summary.cost_if_all_premium_usd)} μ$`}
+                      sub="all routed to premium"
+                    />
+                  </div>
+
+                  {/* Routing decisions table */}
+                  <div className="bg-slate-900 border border-slate-800 rounded-xl overflow-hidden">
+                    <div className="px-4 py-3 border-b border-slate-800">
+                      <h2 className="text-sm font-semibold text-white">Routing Decisions</h2>
                     </div>
-                  ))}
+                    <div className="overflow-x-auto">
+                      <table className="w-full text-xs">
+                        <thead>
+                          <tr className="border-b border-slate-800 text-slate-500">
+                            <th className="text-left px-4 py-2 font-normal">Task</th>
+                            <th className="text-left px-4 py-2 font-normal">Route</th>
+                            <th className="text-left px-4 py-2 font-normal">Reason</th>
+                            <th className="text-right px-4 py-2 font-normal">Cost (μ$)</th>
+                            <th className="text-right px-4 py-2 font-normal">Latency</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {results.tasks.map((task, i) => (
+                            <tr key={i} className="border-b border-slate-800/50 hover:bg-slate-800/30 transition-colors">
+                              <td className="px-4 py-3 text-slate-300 font-medium">{task.task_type}</td>
+                              <td className="px-4 py-3"><RouteBadge route={task.route} /></td>
+                              <td className="px-4 py-3 text-slate-500 max-w-xs">
+                                <span className="block truncate" title={task.routing_reason}>
+                                  {task.routing_reason}
+                                </span>
+                              </td>
+                              <td className="px-4 py-3 text-right">
+                                {task.estimated_cost_usd === 0
+                                  ? <span className="text-emerald-400">$0.00</span>
+                                  : <span className="text-slate-400">${toMicro(task.estimated_cost_usd)}</span>
+                                }
+                              </td>
+                              <td className="px-4 py-3 text-right text-slate-400">{task.estimated_latency_ms}ms</td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  </div>
+
+                  {/* Charts */}
+                  <div className="grid grid-cols-2 gap-4">
+                    <div className="bg-slate-900 border border-slate-800 rounded-xl p-4">
+                      <h3 className="text-xs font-semibold text-slate-400 uppercase tracking-widest mb-4">
+                        Cost per Task (μ$)
+                      </h3>
+                      <ResponsiveContainer width="100%" height={160}>
+                        <BarChart data={costData} margin={{ left: -20, right: 8 }}>
+                          <XAxis dataKey="name" tick={{ fill: '#475569', fontSize: 9 }} />
+                          <YAxis tick={{ fill: '#475569', fontSize: 9 }} />
+                          <Tooltip {...tooltipStyle} formatter={v => [`${v} μ$`, 'cost']} />
+                          <Bar dataKey="v" radius={[4, 4, 0, 0]}>
+                            {costData.map((entry, i) => (
+                              <Cell key={i} fill={TIER[entry.route]?.color ?? '#6366f1'} />
+                            ))}
+                          </Bar>
+                        </BarChart>
+                      </ResponsiveContainer>
+                    </div>
+
+                    <div className="bg-slate-900 border border-slate-800 rounded-xl p-4">
+                      <h3 className="text-xs font-semibold text-slate-400 uppercase tracking-widest mb-4">
+                        Latency per Task (ms)
+                      </h3>
+                      <ResponsiveContainer width="100%" height={160}>
+                        <BarChart data={latencyData} margin={{ left: -20, right: 8 }}>
+                          <XAxis dataKey="name" tick={{ fill: '#475569', fontSize: 9 }} />
+                          <YAxis tick={{ fill: '#475569', fontSize: 9 }} />
+                          <Tooltip {...tooltipStyle} formatter={v => [`${v}ms`, 'latency']} />
+                          <Bar dataKey="v" radius={[4, 4, 0, 0]}>
+                            {latencyData.map((entry, i) => (
+                              <Cell key={i} fill={TIER[entry.route]?.color ?? '#6366f1'} />
+                            ))}
+                          </Bar>
+                        </BarChart>
+                      </ResponsiveContainer>
+                    </div>
+                  </div>
+
+                  {/* Execution results */}
+                  <div className="bg-slate-900 border border-slate-800 rounded-xl overflow-hidden">
+                    <div className="px-4 py-3 border-b border-slate-800">
+                      <h2 className="text-sm font-semibold text-white">Execution Results</h2>
+                    </div>
+                    <div className="divide-y divide-slate-800">
+                      {results.tasks.map((task, i) => (
+                        <div key={i} className="px-4 py-3">
+                          <div className="flex items-center gap-2 mb-2">
+                            <RouteBadge route={task.route} />
+                            <span className="text-xs font-medium text-slate-300">{task.task_type}</span>
+                            <span className="text-xs text-slate-700 ml-auto">{task.execution_method}</span>
+                          </div>
+                          <pre className="text-xs text-slate-400 whitespace-pre-wrap break-words leading-relaxed">
+                            {typeof task.result === 'string'
+                              ? task.result
+                              : JSON.stringify(task.result, null, 2)}
+                          </pre>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+
                 </div>
-              </div>
+              )}
+            </div>
+          )}
+
+          {/* ── History tab ── */}
+          {activeTab === 'history' && (
+            <div className="flex-1 overflow-y-auto p-6">
+
+              {histLoading && (
+                <div className="h-64 flex items-center justify-center text-slate-500">
+                  <div className="text-center">
+                    <div className="w-8 h-8 border-2 border-slate-700 border-t-blue-500 rounded-full animate-spin mx-auto mb-3" />
+                    <p className="text-sm">Loading history...</p>
+                  </div>
+                </div>
+              )}
+
+              {histError && (
+                <div className="h-64 flex items-center justify-center">
+                  <p className="text-sm text-rose-400">{histError}</p>
+                </div>
+              )}
+
+              {!histLoading && !histError && analytics && (
+                <div className="space-y-5 max-w-4xl">
+
+                  {/* All-time stats */}
+                  <div className="grid grid-cols-3 gap-4">
+                    <StatCard
+                      highlight
+                      label="All-Time Savings"
+                      value={`${analytics.savings_percent}%`}
+                      sub={`$${toMicro(analytics.total_savings_usd)} μ$ saved total`}
+                    />
+                    <StatCard
+                      label="Tasks Processed"
+                      value={analytics.total_tasks.toLocaleString()}
+                      sub="across all sessions"
+                    />
+                    <StatCard
+                      label="Total Spend"
+                      value={`$${toMicro(analytics.total_cost_usd)} μ$`}
+                      sub="with intelligent routing"
+                    />
+                  </div>
+
+                  {/* Tier breakdown */}
+                  {Object.keys(analytics.by_route).length > 0 && (
+                    <div className="grid grid-cols-3 gap-4">
+                      {['local', 'small', 'premium'].map(route => {
+                        const d = analytics.by_route[route]
+                        if (!d) return null
+                        return (
+                          <div key={route} className="bg-slate-900 border border-slate-800 rounded-xl p-4">
+                            <RouteBadge route={route} />
+                            <p className="text-2xl font-black text-white mt-2">{d.count}</p>
+                            <p className="text-xs text-slate-600 mt-1">
+                              tasks · ${toMicro(d.savings)} μ$ saved
+                            </p>
+                          </div>
+                        )
+                      })}
+                    </div>
+                  )}
+
+                  {/* Savings over time */}
+                  <div className="bg-slate-900 border border-slate-800 rounded-xl p-4">
+                    <h3 className="text-xs font-semibold text-slate-400 uppercase tracking-widest mb-4">
+                      Savings Over Time (μ$ / day · last 30 days)
+                    </h3>
+                    {analytics.daily_savings.length === 0 ? (
+                      <div className="h-40 flex items-center justify-center text-slate-700 text-xs">
+                        No data yet — run some tasks to see the chart
+                      </div>
+                    ) : (
+                      <ResponsiveContainer width="100%" height={180}>
+                        <LineChart
+                          data={analytics.daily_savings.map(d => ({
+                            day:     d.day.slice(5),   // MM-DD
+                            savings: toMicro(d.daily_savings),
+                            tasks:   d.task_count,
+                          }))}
+                          margin={{ left: -20, right: 8 }}
+                        >
+                          <XAxis dataKey="day" tick={{ fill: '#475569', fontSize: 9 }} />
+                          <YAxis tick={{ fill: '#475569', fontSize: 9 }} />
+                          <Tooltip
+                            {...tooltipStyle}
+                            formatter={(v, name) => name === 'savings' ? [`${v} μ$`, 'saved'] : [v, 'tasks']}
+                          />
+                          <Line
+                            type="monotone"
+                            dataKey="savings"
+                            stroke="#10b981"
+                            strokeWidth={2}
+                            dot={{ fill: '#10b981', r: 3 }}
+                            activeDot={{ r: 5 }}
+                          />
+                        </LineChart>
+                      </ResponsiveContainer>
+                    )}
+                  </div>
+
+                  {/* Recent executions table */}
+                  <div className="bg-slate-900 border border-slate-800 rounded-xl overflow-hidden">
+                    <div className="px-4 py-3 border-b border-slate-800 flex items-center justify-between">
+                      <h2 className="text-sm font-semibold text-white">Recent Executions</h2>
+                      <span className="text-xs text-slate-600">{history.length} shown</span>
+                    </div>
+                    {history.length === 0 ? (
+                      <div className="px-4 py-8 text-center text-slate-700 text-xs">
+                        No executions logged yet — run your first analysis
+                      </div>
+                    ) : (
+                      <div className="overflow-x-auto">
+                        <table className="w-full text-xs">
+                          <thead>
+                            <tr className="border-b border-slate-800 text-slate-500">
+                              <th className="text-left px-4 py-2 font-normal">Task</th>
+                              <th className="text-left px-4 py-2 font-normal">Route</th>
+                              <th className="text-left px-4 py-2 font-normal">Method</th>
+                              <th className="text-right px-4 py-2 font-normal">Cost (μ$)</th>
+                              <th className="text-right px-4 py-2 font-normal">Saved (μ$)</th>
+                              <th className="text-right px-4 py-2 font-normal">When</th>
+                            </tr>
+                          </thead>
+                          <tbody>
+                            {history.map((row, i) => (
+                              <tr key={row.id ?? i} className="border-b border-slate-800/50 hover:bg-slate-800/30 transition-colors">
+                                <td className="px-4 py-2.5 text-slate-300">{row.task_type}</td>
+                                <td className="px-4 py-2.5"><RouteBadge route={row.route} /></td>
+                                <td className="px-4 py-2.5 text-slate-600">{row.execution_method ?? '—'}</td>
+                                <td className="px-4 py-2.5 text-right">
+                                  {row.estimated_cost_usd === 0
+                                    ? <span className="text-emerald-400">$0.00</span>
+                                    : <span className="text-slate-400">${toMicro(row.estimated_cost_usd)}</span>
+                                  }
+                                </td>
+                                <td className="px-4 py-2.5 text-right text-emerald-400">
+                                  ${toMicro(row.savings_vs_premium_usd)}
+                                </td>
+                                <td className="px-4 py-2.5 text-right text-slate-600">
+                                  {fmtDate(row.created_at)}
+                                </td>
+                              </tr>
+                            ))}
+                          </tbody>
+                        </table>
+                      </div>
+                    )}
+                  </div>
+
+                </div>
+              )}
+
+              {/* Empty analytics state */}
+              {!histLoading && !histError && !analytics && (
+                <div className="h-64 flex flex-col items-center justify-center text-slate-700 gap-2">
+                  <span className="text-4xl">📊</span>
+                  <p className="text-sm">Run an analysis first to see history</p>
+                </div>
+              )}
 
             </div>
           )}
+
         </main>
       </div>
     </div>

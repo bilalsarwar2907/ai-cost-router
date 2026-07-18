@@ -15,6 +15,7 @@ simulated result so the rest of the system still works for demos.
 import os
 import re
 from router import Route
+import preprocess
 
 # ── Rich demo responses ───────────────────────────────────────────────────────
 # Used when live APIs are unavailable (rate-limited, no key, etc.)
@@ -216,7 +217,12 @@ class Executor:
             "keyword_extraction":"List the 10 most important keywords or phrases, one per line.\n\n",
             "section_labeling":  "Identify and label the main sections. Format: Section Name: brief description\n\n",
         }
-        user_prompt = prompts.get(task_type, f"Process this task ({task_type}):\n\n") + content[:3000]
+
+        # Compress before sending — strip noise, cap to small-model budget
+        clean_content, stats = preprocess.compress(content, "small")
+        user_prompt = prompts.get(task_type, f"Process this task ({task_type}):\n\n") + clean_content
+
+        compression_label = f" [ctx -{stats['reduction_pct']}%]" if stats['reduction_pct'] > 0 else ""
 
         # Try OpenAI first
         if self.openai_key:
@@ -234,7 +240,7 @@ class Executor:
                 )
                 return {
                     "result":      response.choices[0].message.content,
-                    "method":      "gpt-4o-mini",
+                    "method":      f"gpt-4o-mini{compression_label}",
                     "tokens_used": response.usage.total_tokens,
                 }
             except Exception:
@@ -253,7 +259,7 @@ class Executor:
                 )
                 return {
                     "result":      result.text,
-                    "method":      "gemini-2.0-flash-lite",
+                    "method":      f"gemini-2.0-flash-lite{compression_label}",
                     "tokens_used": 0,
                 }
             except Exception:
@@ -261,7 +267,7 @@ class Executor:
 
         return {
             "result":      DEMO_RESPONSES.get(task_type, f"Document classified and processed successfully."),
-            "method":      "demo_mode",
+            "method":      f"demo_mode{compression_label}",
             "tokens_used": 0,
         }
 
@@ -277,7 +283,11 @@ class Executor:
             "decision_support":        "Provide a structured decision framework: Key Facts, Options, Risks, and a Recommendation.\n\n",
             "strategic_recommendations": "Provide 3–5 specific, actionable strategic recommendations with reasoning for each.\n\n",
         }
-        user_prompt = prompts.get(task_type, f"Perform expert-level analysis for '{task_type}':\n\n") + content[:8000]
+        # Compress before sending — strip noise, cap to premium budget
+        clean_content, stats = preprocess.compress(content, "premium")
+        user_prompt = prompts.get(task_type, f"Perform expert-level analysis for '{task_type}':\n\n") + clean_content
+
+        compression_label = f" [ctx -{stats['reduction_pct']}%]" if stats['reduction_pct'] > 0 else ""
 
         # Try Anthropic first
         if self.anthropic_key:
@@ -291,7 +301,7 @@ class Executor:
                 )
                 return {
                     "result":      message.content[0].text,
-                    "method":      "claude-sonnet-4-5",
+                    "method":      f"claude-sonnet-4-5{compression_label}",
                     "tokens_used": message.usage.input_tokens + message.usage.output_tokens,
                 }
             except Exception:
@@ -310,7 +320,7 @@ class Executor:
                 )
                 return {
                     "result":      result.text,
-                    "method":      "gemini-2.0-flash-lite",
+                    "method":      f"gemini-2.0-flash-lite{compression_label}",
                     "tokens_used": 0,
                 }
             except Exception:
@@ -318,6 +328,6 @@ class Executor:
 
         return {
             "result":      DEMO_RESPONSES.get(task_type, "Analysis completed successfully."),
-            "method":      "demo_mode",
+            "method":      f"demo_mode{compression_label}",
             "tokens_used": 0,
         }

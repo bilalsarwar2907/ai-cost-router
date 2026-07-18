@@ -13,3 +13,10 @@ env/
 # OS
 .DS_Store
 Thumbs.db
+
+# Docker
+*.env
+5.0.0
+
+# Test / scratch files
+test_*.py

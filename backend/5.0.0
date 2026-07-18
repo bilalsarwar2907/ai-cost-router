@@ -1,0 +1,5 @@
+Collecting pyodbc
+  Downloading pyodbc-5.3.0-cp314-cp314-win_amd64.whl.metadata (2.8 kB)
+Downloading pyodbc-5.3.0-cp314-cp314-win_amd64.whl (72 kB)
+Installing collected packages: pyodbc
+Successfully installed pyodbc-5.3.0
